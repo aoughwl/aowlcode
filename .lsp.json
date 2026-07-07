@@ -1,6 +1,7 @@
 {
-  "nim": {
-    "command": "nimlangserver",
+  "nim-code": {
+    "command": "python3",
+    "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/lsp-dispatch.py"],
     "extensionToLanguage": {
       ".nim": "nim",
       ".nims": "nim"

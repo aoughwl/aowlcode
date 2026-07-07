@@ -1,6 +1,6 @@
 {
   "name": "nim-code",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Token-efficient agent tooling for Nim and Nimony codebases: compile/diagnostics, NIF artifact inspection (outline/query/diff), def/uses, and a build-output-trimming toolkit.",
   "author": {
     "name": "savannt"

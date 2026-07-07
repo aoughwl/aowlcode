@@ -96,11 +96,13 @@ argument overrides it per call.
 nim-code/                         ${CLAUDE_PLUGIN_ROOT}
 ├── .claude-plugin/plugin.json    manifest
 ├── .mcp.json                     registers the `nimlang` MCP server
-├── .lsp.json                     optional Nim LSP (nimlangserver); Nimony LSP is a per-project opt-in — see LSP
+├── .lsp.json                     optional LSP; routes through scripts/lsp-dispatch.py — see LSP
 ├── mcp/
 │   ├── server.py                 MCP server — stdlib-only Python 3.7, zero dependencies
 │   ├── test_server.py            self-test: exercises all tools against live nim/nimony
 │   └── README.md                 manual nimsuggest / nimsem fallback notes
+├── scripts/
+│   └── lsp-dispatch.py           picks nimlangserver vs nimony-lsp per project
 ├── hooks/
 │   ├── hooks.json                hook wiring
 │   ├── guard-nif-read.py         PreToolUse(Read)  — intercept large .nif reads
@@ -173,44 +175,53 @@ command, and skill works without any LSP installed. Auto‑diagnostics are on
 (`"diagnostics": true`); set it to `false` in `.lsp.json` to keep navigation but
 suppress the per‑edit injection.
 
-### Nim (shipped)
+### One entry, per‑project auto‑selection
 
-`.lsp.json` ships one server:
-[`nimlangserver`](https://github.com/nim-lang/langserver), for `.nim`/`.nims`.
-Install it with `nimble install nimlangserver`; until the binary is on `PATH`
-the entry surfaces in the `/plugin` **Errors** tab and nothing else is affected.
+Nim and Nimony share the `.nim` extension, `.lsp.json` routes servers by
+extension, and Claude Code has no documented way to disambiguate two servers
+claiming the same one — running both at once would double‑diagnose every file,
+each server choking on the other language. Its only documented LSP surface is a
+plugin's own `.lsp.json`; there is no supported project‑level LSP override or
+per‑server `disabled` flag.
 
-### Nimony (per‑project opt‑in)
-
-The Nimony language server is [`aoughwl/nimony-lsp`](https://github.com/aoughwl/nimony-lsp).
-It is **not** shipped active in `.lsp.json`, deliberately: Nim and Nimony share
-the `.nim` extension, `.lsp.json` routes servers by extension, and Claude Code
-has no documented way to disambiguate two servers claiming the same extension.
-Running both at once would double‑diagnose every `.nim` file (each server
-choking on the other language's syntax).
-
-Because a workspace is Nim **or** Nimony, enable exactly one per project. In a
-Nimony project, add a project‑level `.claude/settings.json` that turns on
-`nimony-lsp` and turns off the Nim entry:
+So `.lsp.json` ships a **single** entry whose command is a dispatcher,
+[`scripts/lsp-dispatch.py`](scripts/lsp-dispatch.py) (stdlib‑only Python 3):
 
 ```json
 {
-  "lspServers": {
-    "nim": { "disabled": true },
-    "nimony": {
-      "command": "nimony-lsp",
-      "extensionToLanguage": { ".nim": "nimony", ".nims": "nimony" },
-      "diagnostics": true
-    }
+  "nim-code": {
+    "command": "python3",
+    "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/lsp-dispatch.py"],
+    "extensionToLanguage": { ".nim": "nim", ".nims": "nim" },
+    "diagnostics": true
   }
 }
 ```
 
-Install `nimony-lsp` (see [aoughwl/nimony-lsp](https://github.com/aoughwl/nimony-lsp))
-and put its binary on `PATH`. Nimony projects without the LSP lose nothing else:
-navigation and diagnostics stay on the MCP tools (`compile`, `defs_uses`,
-`symbols`, the `nif_*` family), which are the only path an LSP does not cover
-for Nimony's NIF pipeline.
+On launch the dispatcher applies the **same toolchain detection as the MCP
+server** — walk up from the workspace for a `nimony.paths`/`nimony.cfg` (or a
+`nim.cfg` naming nimony); `NIMLANG_TOOLCHAIN=nim|nimony` forces it — then
+`exec`s exactly one real server, passing the JSON‑RPC stdio through untouched:
+
+| Detected | Server | Install |
+|----------|--------|---------|
+| Nim (default) | [`nimlangserver`](https://github.com/nim-lang/langserver) | `nimble install nimlangserver` |
+| Nimony | [`aoughwl/nimony-lsp`](https://github.com/aoughwl/nimony-lsp) | build `server/` → put `nimony-lsp` on `PATH` |
+
+Because only one server is ever started, the same‑extension hazard never
+arises, and no per‑project configuration is required. Overrides (all optional
+env): `NIMONY_LSP` / `NIM_LANGSERVER` point at the server binaries; `NIMONY_EXE`
+sets the Nimony compiler the LSP shells out to (the dispatcher auto‑fills it
+from the `nimony` on `PATH`). If the selected server is not installed, the
+dispatcher exits with a one‑line reason in the `/plugin` **Errors** tab and
+nothing else is affected.
+
+`nimony-lsp` is verified working end‑to‑end against `nimony` 0.4.0 —
+diagnostics, goto‑definition, find‑references, hover, and document symbols all
+respond (completion is advertised). A Nimony project without the LSP loses
+nothing else: navigation and diagnostics stay on the MCP tools (`compile`,
+`defs_uses`, `symbols`, the `nif_*` family), which are the only path an LSP does
+not cover for Nimony's NIF pipeline.
 
 ## Hooks
 
@@ -329,9 +340,11 @@ parsed:
 `mcp/test_server.py` starts the server and exercises all thirteen tools against
 live `nim` and `nimony` compiles; run it to verify the environment.
 
-The optional Nim LSP additionally needs **nimlangserver** (`nimble install
-nimlangserver`); see [LSP](#lsp-optional-nim). It is not required for any MCP
-tool, hook, command, or skill.
+The optional LSP additionally needs a language server on `PATH` —
+**nimlangserver** (`nimble install nimlangserver`) for Nim and/or
+**nimony-lsp** ([aoughwl/nimony-lsp](https://github.com/aoughwl/nimony-lsp)) for
+Nimony; the dispatcher picks per project. See [LSP](#lsp-optional). Neither is
+required for any MCP tool, hook, command, or skill.
 
 ## Design notes
 
@@ -349,6 +362,14 @@ tool, hook, command, or skill.
 
 ## Changelog
 
+- **0.3** — LSP is now a single auto‑dispatching `.lsp.json` entry
+  (`scripts/lsp-dispatch.py`): it applies the plugin's toolchain detection per
+  project and `exec`s `nimlangserver` for Nim or `nimony-lsp` for Nimony,
+  launching exactly one server so the shared‑`.nim` collision cannot arise.
+  Replaces the earlier Nim‑only entry plus the unsupported project‑settings
+  opt‑in. `nimony-lsp` ([aoughwl/nimony-lsp](https://github.com/aoughwl/nimony-lsp))
+  verified against `nimony` 0.4.0 (diagnostics, goto‑def, find‑refs, hover,
+  document symbols).
 - **0.2** — Terse mode on all tools (`NIMLANG_AGGRESSIVE`); `explain_failure`,
   `phase_report`, `nif_render`, `shrink`, `api`, `symbols`; `guard-nif-bash`
   hook and the transform‑not‑block upgrade to `guard-nif-read`; `nim-fixer`
