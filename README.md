@@ -20,7 +20,7 @@ emits). Toolchain selection is automatic and overridable.
 - [Components](#components)
 - [MCP tool reference](#mcp-tool-reference)
 - [Terse mode](#terse-mode)
-- [LSP (optional, Nim)](#lsp-optional-nim)
+- [LSP (optional)](#lsp-optional)
 - [Hooks](#hooks)
 - [Commands](#commands)
 - [Skills and subagents](#skills-and-subagents)
@@ -96,7 +96,7 @@ argument overrides it per call.
 nim-code/                         ${CLAUDE_PLUGIN_ROOT}
 ├── .claude-plugin/plugin.json    manifest
 ├── .mcp.json                     registers the `nimlang` MCP server
-├── .lsp.json                     optional Nim LSP (nimlangserver) — see LSP
+├── .lsp.json                     optional Nim LSP (nimlangserver); Nimony LSP is a per-project opt-in — see LSP
 ├── mcp/
 │   ├── server.py                 MCP server — stdlib-only Python 3.7, zero dependencies
 │   ├── test_server.py            self-test: exercises all tools against live nim/nimony
@@ -155,30 +155,61 @@ back‑compatible and opt‑in.
 
 `/aggressive [on|off]` documents enabling terse mode and its trade‑offs.
 
-## LSP (optional, Nim)
+## LSP (optional)
 
-`.lsp.json` registers [`nimlangserver`](https://github.com/nim-lang/langserver)
-as a Nim language server. Claude Code consumes it as a first‑class capability:
-after each edit to a `.nim`/`.nims` file it injects type errors into context
-automatically (no separate build step), and the agent can call it for
-go‑to‑definition, find‑references, hover types, and workspace symbol search —
-backed by a persistent index, so results are more precise than the per‑call
-`nimsuggest`/regex paths the MCP tools use.
+Claude Code consumes a language server as a first‑class capability: after each
+edit to a mapped file it injects type errors into context automatically (no
+separate build step), and the agent can call it for go‑to‑definition,
+find‑references, hover types, and workspace symbol search — backed by a
+persistent index, so results are more precise than the per‑call
+`nimsuggest`/regex paths the MCP tools use. The LSP and the MCP tools are
+complementary: the LSP closes the edit → error loop automatically, while the
+MCP tools provide the NIF‑aware and dependency‑API operations an LSP does not.
 
-This is an **optional enhancement, not part of the baseline**:
+The LSP is an **optional enhancement, not part of the baseline** — the MCP layer
+remains the both‑toolchains, zero‑dependency core, and every tool, hook,
+command, and skill works without any LSP installed. Auto‑diagnostics are on
+(`"diagnostics": true`); set it to `false` in `.lsp.json` to keep navigation but
+suppress the per‑edit injection.
 
-- **Nim only.** Nimony has no LSP; its navigation and diagnostics stay on the
-  MCP tools (`compile`, `defs_uses`, `symbols`, the `nif_*` family). The MCP
-  layer remains the both‑toolchains, zero‑dependency baseline.
-- **Requires a separate install**: `nimble install nimlangserver`. Until the
-  binary is on `PATH`, the entry surfaces in the `/plugin` **Errors** tab and
-  everything else in the plugin continues to work.
-- Auto‑diagnostics are on (`"diagnostics": true`). To keep code navigation but
-  suppress the automatic per‑edit injection, set it to `false` in `.lsp.json`.
+### Nim (shipped)
 
-The LSP and the MCP tools are complementary: the LSP closes the edit → error
-loop for Nim automatically, while the MCP tools provide the NIF‑aware,
-Nimony‑capable, and dependency‑API operations an LSP does not.
+`.lsp.json` ships one server:
+[`nimlangserver`](https://github.com/nim-lang/langserver), for `.nim`/`.nims`.
+Install it with `nimble install nimlangserver`; until the binary is on `PATH`
+the entry surfaces in the `/plugin` **Errors** tab and nothing else is affected.
+
+### Nimony (per‑project opt‑in)
+
+The Nimony language server is [`aoughwl/nimony-lsp`](https://github.com/aoughwl/nimony-lsp).
+It is **not** shipped active in `.lsp.json`, deliberately: Nim and Nimony share
+the `.nim` extension, `.lsp.json` routes servers by extension, and Claude Code
+has no documented way to disambiguate two servers claiming the same extension.
+Running both at once would double‑diagnose every `.nim` file (each server
+choking on the other language's syntax).
+
+Because a workspace is Nim **or** Nimony, enable exactly one per project. In a
+Nimony project, add a project‑level `.claude/settings.json` that turns on
+`nimony-lsp` and turns off the Nim entry:
+
+```json
+{
+  "lspServers": {
+    "nim": { "disabled": true },
+    "nimony": {
+      "command": "nimony-lsp",
+      "extensionToLanguage": { ".nim": "nimony", ".nims": "nimony" },
+      "diagnostics": true
+    }
+  }
+}
+```
+
+Install `nimony-lsp` (see [aoughwl/nimony-lsp](https://github.com/aoughwl/nimony-lsp))
+and put its binary on `PATH`. Nimony projects without the LSP lose nothing else:
+navigation and diagnostics stay on the MCP tools (`compile`, `defs_uses`,
+`symbols`, the `nif_*` family), which are the only path an LSP does not cover
+for Nimony's NIF pipeline.
 
 ## Hooks
 
