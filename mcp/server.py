@@ -273,6 +273,98 @@ def tool_compile(args):
 
 
 # --------------------------------------------------------------------------
+# Tool: build
+# --------------------------------------------------------------------------
+
+def _find_nimony_binary(cwd, modname):
+    """nimony c emits the executable under cwd/nimcache/<hash>/<modname>."""
+    hits = []
+    for suffix in ('', '.exe'):
+        pat = os.path.join(cwd, 'nimcache', '*', modname + suffix)
+        for h in glob.glob(pat):
+            if os.path.isfile(h) and os.access(h, os.X_OK):
+                hits.append(h)
+    if not hits:
+        return None
+    hits.sort(key=lambda h: os.path.getmtime(h), reverse=True)
+    return hits[0]
+
+
+def tool_build(args):
+    """Produce a linked executable (unlike `compile`, which only type-checks
+    Nim), still returning structured, noise-stripped diagnostics."""
+    file_path = args.get('file')
+    if not file_path:
+        return {'error': 'missing required arg: file'}
+    if not os.path.isfile(file_path):
+        return {'error': 'no such file: %s' % file_path}
+    toolchain = resolve_toolchain(file_path, args.get('toolchain', 'auto'))
+    extra = args.get('extra_args') or []
+    if not isinstance(extra, list):
+        extra = [str(extra)]
+    do_run = bool(args.get('run'))
+    release = bool(args.get('release'))
+    cwd = os.path.dirname(os.path.abspath(file_path)) or '.'
+    modname = os.path.splitext(os.path.basename(file_path))[0]
+
+    rel = ['-d:release'] if release else []
+    if toolchain == 'nimony':
+        cmd = [nimony_bin('nimony'), 'c'] + rel + list(extra) + [file_path]
+    else:
+        cmd = [nim_bin('nim'), 'c', '--hints:off', '--colors:off'] + rel + \
+            list(extra) + [file_path]
+
+    rc, out, timed_out = run(cmd, cwd=cwd, timeout=300)
+    diags = parse_diagnostics(out)
+    has_error = any(d['severity'] == 'Error' for d in diags)
+    if toolchain == 'nimony':
+        ok = not has_error
+    else:
+        ok = (rc == 0) and not has_error
+    if timed_out:
+        ok = False
+
+    # Locate the produced binary.
+    binary = None
+    if ok:
+        if toolchain == 'nimony':
+            binary = _find_nimony_binary(cwd, modname)
+        else:
+            cand = os.path.join(cwd, modname)
+            if os.name == 'nt':
+                cand = cand + '.exe'
+            if os.path.isfile(cand):
+                binary = cand
+
+    # Optionally run the binary; keep its output separate from diagnostics and
+    # give it an empty stdin so it can't read the server's JSON-RPC stream.
+    run_result = None
+    if do_run and binary:
+        rrc, rout, rtimed = run([binary], cwd=cwd, timeout=30, stdin_data='')
+        if len(rout) > 4000:
+            rout = rout[:4000] + '\n... [trimmed]'
+        run_result = {'exit_code': rrc, 'output': rout}
+        if rtimed:
+            run_result['timed_out'] = True
+
+    if resolve_terse(args):
+        kept = [d for d in diags if d['severity'] in ('Error', 'Trace')]
+        result = {'ok': ok, 'toolchain': toolchain,
+                  'diagnostics': [diag_to_str(d) for d in kept]}
+    else:
+        result = {'ok': ok, 'toolchain': toolchain, 'diagnostics': diags}
+    if binary:
+        result['binary'] = binary
+    elif ok:
+        result['note'] = 'built with no errors but the binary was not located'
+    if run_result is not None:
+        result['run'] = run_result
+    if timed_out:
+        result['timed_out'] = True
+    return result
+
+
+# --------------------------------------------------------------------------
 # Tool: outline
 # --------------------------------------------------------------------------
 
@@ -1691,6 +1783,31 @@ TOOLS = [
             'required': ['file'],
         },
         'handler': tool_compile,
+    },
+    {
+        'name': 'build',
+        'description': 'Build a linked executable (nim c / nimony c) and return '
+                       'structured, noise-stripped diagnostics plus the binary '
+                       "path. Unlike `compile`, this produces a runnable binary "
+                       '(compile only type-checks Nim). Optional run/release.',
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'file': {'type': 'string', 'description': 'Path to .nim file.'},
+                'toolchain': TOOLCHAIN_ENUM,
+                'run': {'type': 'boolean',
+                        'description': 'Run the built binary and capture its '
+                                       'output (default false).'},
+                'release': {'type': 'boolean',
+                            'description': 'Build with -d:release (default '
+                                           'false).'},
+                'extra_args': {'type': 'array', 'items': {'type': 'string'},
+                               'description': 'Extra compiler args.'},
+                'terse': TERSE_PROP,
+            },
+            'required': ['file'],
+        },
+        'handler': tool_build,
     },
     {
         'name': 'outline',

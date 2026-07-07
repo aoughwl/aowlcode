@@ -1,3 +1,6 @@
 __pycache__/
 *.pyc
 nimcache*/
+
+# Local Claude Code state (not plugin content)
+.claude/

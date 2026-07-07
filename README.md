@@ -106,7 +106,7 @@ nim-code/                         ${CLAUDE_PLUGIN_ROOT}
 │   ├── guard-nif-read.py         PreToolUse(Read)  — intercept large .nif reads
 │   ├── guard-nif-bash.py         PreToolUse(Bash)  — intercept .nif dumps
 │   └── trim-build-output.py      PostToolUse(Bash) — strip build noise
-├── commands/                     10 slash commands (see Commands)
+├── commands/                     11 slash commands (see Commands)
 ├── skills/                       5 skills (see Skills and subagents)
 └── agents/                       2 subagents (see Skills and subagents)
 ```
@@ -117,14 +117,15 @@ call. It never returns a whole NIF file.
 
 ## MCP tool reference
 
-Twelve tools are exposed by the `nimlang` server. `compile`, `outline`,
+Thirteen tools are exposed by the `nimlang` server. `compile`, `build`, `outline`,
 `defs_uses`, `explain_failure`, `phase_report`, `shrink`, `api`, and `symbols`
 support both toolchains. The `nif_*` tools operate on Nimony NIF artifacts and
 are Nimony‑only. Every tool accepts `terse` (see [Terse mode](#terse-mode)).
 
 | Tool | Signature | Result / behavior | Toolchains |
 |------|-----------|-------------------|------------|
-| `compile` | `(file, toolchain="auto", extra_args=[])` | Runs `nim check` or `nimony c`, parses diagnostics, and reports `ok` by the presence of an `Error:` line rather than the exit code. Returns `{ok, toolchain, stage, diagnostics}`. | both |
+| `compile` | `(file, toolchain="auto", extra_args=[])` | Type‑checks: runs `nim check` or `nimony c`, parses diagnostics, and reports `ok` by the presence of an `Error:` line rather than the exit code. Returns `{ok, toolchain, stage, diagnostics}`. Does not produce a binary — use `build` for that. | both |
+| `build` | `(file, toolchain="auto", run=false, release=false, extra_args=[])` | Produces a linked executable (`nim c` / `nimony c`) with the same structured, noise‑stripped diagnostics, plus the `binary` path (Nim: beside the source; Nimony: `nimcache/<hash>/<module>`). With `run:true`, runs the binary and returns its `{exit_code, output}` separately from diagnostics; `release` adds `-d:release`. | both |
 | `outline` | `(file, toolchain="auto")` | Top‑level symbols `{name, kind, line, col}`. Nim via `nimsuggest outline`; Nimony (and the Nim fallback) via a source regex scan. | both |
 | `defs_uses` | `(file, line, col, toolchain="auto")` | Definition and uses of the symbol at a position: `{def, uses}`. Nim via `nimsuggest def`/`use`; Nimony via `nimsem --def:FILE,LINE,COL idetools` and `--usages:` against the module's `.s.nif` in `nimcache`. Degrades to `{error, hint}` if the artifact is absent. | both |
 | `explain_failure` | `(file, toolchain="auto")` | Compiles and, on failure, returns a short `verdict` and a `culprit`. Nimony extracts the smallest NIF node spanning the error position from the phase artifact; Nim returns ±3 source lines around the first error. Collapses the compile → outline → query sequence into one call. | both |
@@ -231,7 +232,8 @@ response.
 
 | Command | Tool | Purpose |
 |---------|------|---------|
-| `/check [file]` | `compile` | Compile and report structured diagnostics. |
+| `/check [file]` | `compile` | Type‑check and report structured diagnostics. |
+| `/build [file] [run] [release]` | `build` | Build a linked executable; report diagnostics, the binary path, and optional run output. |
 | `/explain-failure [file]` | `explain_failure` | One‑call "why did this fail," with the culprit. |
 | `/shrink [file]` | `shrink` | Minimal still‑failing reproduction. |
 | `/api <module> [needle]` | `api` | Typed API of a module or dependency. |
@@ -324,7 +326,7 @@ parsed:
   `nim c -r src/hastur build all`). Required for the Nimony side of every tool
   and for all `nif_*` tools.
 
-`mcp/test_server.py` starts the server and exercises all twelve tools against
+`mcp/test_server.py` starts the server and exercises all thirteen tools against
 live `nim` and `nimony` compiles; run it to verify the environment.
 
 The optional Nim LSP additionally needs **nimlangserver** (`nimble install
@@ -351,7 +353,8 @@ tool, hook, command, or skill.
   `phase_report`, `nif_render`, `shrink`, `api`, `symbols`; `guard-nif-bash`
   hook and the transform‑not‑block upgrade to `guard-nif-read`; `nim-fixer`
   subagent; `token-thrift` and `repo-map` skills; installable as a marketplace;
-  optional Nim LSP via `.lsp.json` (`nimlangserver`).
+  optional Nim LSP via `.lsp.json` (`nimlangserver`). `build` tool/`/build`
+  command for producing a linked executable with structured diagnostics.
 - **0.1** — `nimlang` MCP server (`compile`, `outline`, `nif_outline`,
   `nif_query`, `nif_diff`, `defs_uses`); `guard-nif-read` and
   `trim-build-output` hooks; `nif-inspector` subagent; `nif-format`,

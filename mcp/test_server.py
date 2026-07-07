@@ -111,9 +111,9 @@ def main():
         expected = {'compile', 'outline', 'nif_outline', 'nif_query',
                     'nif_diff', 'defs_uses',
                     'explain_failure', 'phase_report', 'nif_render', 'shrink',
-                    'api', 'symbols'}
+                    'api', 'symbols', 'build'}
         assert expected <= names, 'missing tools: %r' % (expected - names)
-        ok('tools/list exposes all 12 tools')
+        ok('tools/list exposes all 13 tools')
 
         # ---- compile: bad Nim ------------------------------------------
         bad_nim = os.path.join(workdir, 'bad_nim.nim')
@@ -254,6 +254,42 @@ def main():
         assert any(d['name'] == 'addup' for d in sy['defs']), \
             'symbols should find the addup proc in good.nim: %r' % sy
         ok('symbols "addup" -> %d def(s) across project' % len(sy['defs']))
+
+        # ---- build: produce a runnable Nim binary and run it ----------
+        runnable = os.path.join(workdir, 'runnable.nim')
+        with open(runnable, 'w') as fh:
+            fh.write('echo "sum=", 2 + 40\n')
+        bd = client.call_tool('build',
+                              {'file': runnable, 'toolchain': 'nim',
+                               'run': True})
+        assert bd['ok'] is True, 'clean Nim file should build: %r' % bd
+        assert bd.get('binary') and os.path.isfile(bd['binary']), \
+            'build should report an existing binary path: %r' % bd
+        assert 'run' in bd and 'sum=42' in bd['run'].get('output', ''), \
+            'build run should capture program output: %r' % bd
+        ok('build Nim -> binary %s, ran it'
+           % os.path.basename(bd['binary']))
+
+        # ---- build: a bad file fails with diagnostics, no binary ------
+        bbd = client.call_tool('build', {'file': bad_nim, 'toolchain': 'nim'})
+        assert bbd['ok'] is False and 'binary' not in bbd, \
+            'failed build must not report a binary: %r' % bbd
+        assert any(d['severity'] == 'Error' for d in bbd['diagnostics'])
+        ok('build bad Nim -> fails, diagnostics, no binary')
+
+        # ---- build: Nimony binary (lands in nimcache/<hash>/) ---------
+        nrun = os.path.join(workdir, 'nrun.nim')
+        with open(nrun, 'w') as fh:
+            fh.write('import std/syncio\necho "nsum=", 20 + 22\n')
+        nbd = client.call_tool('build',
+                               {'file': nrun, 'toolchain': 'nimony',
+                                'run': True})
+        assert nbd['ok'] is True, 'clean Nimony file should build: %r' % nbd
+        assert nbd.get('binary') and os.path.isfile(nbd['binary']), \
+            'Nimony build should locate its nimcache binary: %r' % nbd
+        assert 'nsum=42' in nbd.get('run', {}).get('output', ''), \
+            'Nimony build run should capture output: %r' % nbd
+        ok('build Nimony -> nimcache binary, ran it')
 
     finally:
         client.close()
