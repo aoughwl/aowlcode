@@ -1855,6 +1855,66 @@ def _signature_map(text, needle):
     return out
 
 
+def _find_niflens():
+    """Locate the optional `niflens` helper (a Nim CLI over Nimony's real NIF
+    libraries). Env NIFLENS overrides; else look on PATH. Returns a path or
+    None — when absent, decl_of falls back to the in-Python NIF walk."""
+    cand = os.environ.get('NIFLENS')
+    if cand and os.path.isfile(cand) and os.access(cand, os.X_OK):
+        return cand
+    try:
+        import shutil
+        return shutil.which('niflens')
+    except Exception:
+        return None
+
+
+def _niflens_sites(niflens, path, needle):
+    """Declaration sites in one .s.nif via niflens (authoritative parser).
+    Returns a list of {sym, kind, file, line, col} or None on any failure so
+    the caller can fall back. niflens emits 0-based cols (idetools convention);
+    normalize to 1-based to match this tool's contract."""
+    rc, out, timed = run([niflens, 'decls', path, needle], timeout=30)
+    if timed or rc != 0 or not out.strip():
+        return [] if (rc == 0 and not timed) else None
+    try:
+        data = json.loads(out)
+    except ValueError:
+        return None
+    sites = []
+    for d in data:
+        col = d.get('col')
+        sites.append({'sym': d.get('sym'), 'name': d.get('name'),
+                      'kind': d.get('kind'),
+                      'file': d.get('file'), 'line': d.get('line'),
+                      'col': (col + 1) if isinstance(col, int) else col})
+    return sites
+
+
+def _python_sites(text, needle):
+    """Declaration sites in one .s.nif via the in-Python NIF form walk (the
+    fallback when niflens is unavailable). Cols are 1-based."""
+    sites = []
+    for f in nif_forms_with_pos(text):
+        toks = f.get('tokens') or []
+        if not toks:
+            continue
+        symtok = None
+        for t in toks[1:]:
+            if isinstance(t, str) and t[:1] == ':':
+                symtok = t
+                break
+        if symtok is None:
+            continue
+        csym = _clean_symbol(symtok)
+        if not _sym_matches(csym, needle):
+            continue
+        src = f.get('src') or (None, None, None)
+        sites.append({'sym': csym, 'kind': _base_tag(toks[0]),
+                      'file': src[0], 'line': src[1], 'col': src[2]})
+    return sites
+
+
 def tool_decl_of(args):
     """Reverse index: given a symId (or human name), find its declaration
     site(s) across the nimcache NIF artifacts. Fills the symId-keyed gap that
@@ -1881,6 +1941,12 @@ def tool_decl_of(args):
              if '.deps.' not in os.path.basename(p)]
     files.sort(key=os.path.getmtime, reverse=True)
 
+    # Prefer niflens (the compiler's own NIF libraries) for identity + position;
+    # fall back to the in-Python NIF walk when it is not installed. Signatures
+    # are rendered in Python either way (until niflens grows a `render`).
+    niflens = _find_niflens()
+    backend = 'niflens' if niflens else 'python'
+
     decls = []
     seen = set()
     truncated = False
@@ -1890,36 +1956,48 @@ def tool_decl_of(args):
                 text = fh.read()
         except (IOError, OSError):
             continue
-        if needle not in text:  # cheap gate
+        # cheap gate on the human base name — the full module-qualified symId
+        # niflens emits (add.0.<mod>) is not the literal text in the .s.nif.
+        if needle.split('.', 1)[0] not in text:
             continue
+        sites = None
+        if niflens:
+            sites = _niflens_sites(niflens, path, needle)
+            if sites is None:  # niflens failed on this file -> fall back
+                backend = 'python'
+        if sites is None:
+            sites = _python_sites(text, needle)
         sigs = _signature_map(text, needle) if want_sig else {}
-        for f in nif_forms_with_pos(text):
-            toks = f.get('tokens') or []
-            if not toks:
-                continue
-            symtok = None
-            for t in toks[1:]:
-                if isinstance(t, str) and t[:1] == ':':
-                    symtok = t
-                    break
-            if symtok is None:
-                continue
-            csym = _clean_symbol(symtok)
+        for s in sites:
+            csym = s.get('sym')
+            kind = s.get('kind')
             if not _sym_matches(csym, needle):
                 continue
-            kind = _base_tag(toks[0])
             if kind_filter and kind != kind_filter:
                 continue
-            src = f.get('src') or (None, None, None)
-            key = (csym, src[0], src[1], src[2], os.path.basename(path))
+            key = (csym, s.get('file'), s.get('line'), s.get('col'),
+                   os.path.basename(path))
             if key in seen:
                 continue
             seen.add(key)
-            entry = {'sym': csym, 'kind': kind, 'file': src[0],
-                     'line': src[1], 'col': src[2],
+            entry = {'sym': csym, 'kind': kind, 'file': s.get('file'),
+                     'line': s.get('line'), 'col': s.get('col'),
                      'nif': os.path.relpath(path, root)}
-            if want_sig and csym in sigs:
-                entry['signature'] = sigs[csym]
+            # niflens carries a demangled name; expose it when present.
+            if s.get('name'):
+                entry['name'] = s['name']
+            sig = sigs.get(csym)
+            if sig is None and want_sig:
+                # niflens symIds are module-qualified (add.0.<mod>); the Python
+                # render keys on the .s.nif's own token (often add.0.) — match
+                # by human base name as a fallback.
+                base = csym.split('.', 1)[0] if csym else ''
+                for k, v in sigs.items():
+                    if k.split('.', 1)[0] == base:
+                        sig = v
+                        break
+            if want_sig and sig:
+                entry['signature'] = sig
             decls.append(entry)
             if len(decls) >= _MAX_HITS:
                 truncated = True
@@ -1934,6 +2012,7 @@ def tool_decl_of(args):
     else:
         out = {'decls': decls}
     out['root'] = root
+    out['backend'] = backend
     if truncated:
         out['truncated'] = True
     return out

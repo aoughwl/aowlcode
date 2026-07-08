@@ -139,7 +139,7 @@ Nimony NIF artifacts and are Nimony‑only. Every tool accepts `terse` (see
 | `shrink` | `(file, toolchain="auto")` | Delta‑debugs a failing file, dropping top‑level statements while the first `Error:` message is preserved. Returns `{original_lines, minimal_lines, minimal_source, kept_error}`. Iteration‑ and time‑bounded. | both |
 | `api` | `(module, toolchain="auto", needle=None)` | Typed public API of a module or dependency without reading its source. Nim runs `nim jsondoc` on a `.nim` path, an installed nimble package (e.g. `chroma`), or a stdlib module (e.g. `std/tables`), returning `{name, kind, sig}` entries. For a `.nif`/Nimony target the typed API is the compiled artifact, rendered via `nif_render`. `needle` filters by name substring. | both |
 | `symbols` | `(name, root=".", kind=None, uses=false)` | Project‑wide symbol search by name substring; regex‑based and toolchain‑agnostic. Returns `{defs, root}`, and `{uses}` when `uses:true`. Skips `nimcache`, `.git`, `htmldocs`, and nimble dirs; bounded for large trees. | both |
-| `decl_of` | `(symbol, cwd=".", kind=None)` | Reverse index: a Nimony symId (`add.0.tgokb0h9q`, as emitted by `defs_uses`/idetools) or a plain name → its declaration site(s) `{sym, kind, file, line, col, signature, nif}`, walking the `.s.nif` artifacts (a `:`‑prefixed token is a declaration). Fills the symId‑keyed gap `symbols` (by name) and `defs_uses` (by position) leave open — for semantic tokens / workspace symbol. | Nimony |
+| `decl_of` | `(symbol, cwd=".", kind=None)` | Reverse index: a Nimony symId (`add.0.tgokb0h9q`, as emitted by `defs_uses`/idetools) or a plain name → its declaration site(s) `{sym, name, kind, file, line, col, signature, nif}`, plus `backend`. Prefers the [`niflens`](https://github.com/aoughwl/niflens) helper (the compiler's own NIF libraries — authoritative positions and module‑qualified symIds) and falls back to an in‑Python NIF walk when it is absent. Fills the symId‑keyed gap `symbols` (by name) and `defs_uses` (by position) leave open — for semantic tokens / workspace symbol. | Nimony |
 | `nif_outline` | `(nif_file)` | Top‑level `(tag name …)` nodes of a NIF artifact — names only, no bodies. | Nimony |
 | `nif_query` | `(nif_file, needle)` | S‑expr subtrees whose head tag or symbol matches `needle`, each snippet truncated, via a paren‑matching scanner. | Nimony |
 | `nif_render` | `(nif_file, needle=None)` | Renders NIF node(s) as compact pseudo‑Nim (`proc`/`var`/`let`/`call`/`if`/`type`/… mapped to Nim‑like syntax; `sym.NN.mod` demangled to `sym`), falling back to a raw snippet for unknown tags. Roughly an order of magnitude smaller than raw NIF. | Nimony |
@@ -367,6 +367,12 @@ parsed:
 `mcp/test_server.py` starts the server and exercises all fourteen tools against
 live `nim` and `nimony` compiles; run it to verify the environment.
 
+The optional [`niflens`](https://github.com/aoughwl/niflens) helper (a Nim CLI
+over Nimony's own NIF libraries) is preferred by `decl_of` when on `PATH` (or
+`$NIFLENS`); without it, `decl_of` falls back to the in‑Python NIF walk. Build
+it with `NIMONY_SRC=<nimony checkout> nimble build` and put `bin/niflens` on
+`PATH`. Not required for any other tool.
+
 The optional LSP additionally needs a language server on `PATH` —
 **nimlangserver** (`nimble install nimlangserver`) for Nim and/or
 **nimony-lsp** ([aoughwl/nimony-lsp](https://github.com/aoughwl/nimony-lsp)) for
@@ -389,6 +395,14 @@ required for any MCP tool, hook, command, or skill.
 
 ## Changelog
 
+- **0.5** — `decl_of` now prefers the [`niflens`](https://github.com/aoughwl/niflens)
+  helper — a Nim CLI over Nimony's own NIF libraries (`nifreader`/`nifstreams`/
+  `nifcursors`) — for authoritative line info and module‑qualified symIds,
+  falling back to the in‑Python NIF walk when it is absent (reported as
+  `backend`). This is the first step of moving NIF *parsing* off the regex
+  fallback onto the compiler's real libraries via a subprocess, while the Python
+  server stays the zero‑install orchestration layer; the same core is intended
+  to back a Nimony LSP and a persistent NIF daemon.
 - **0.4** — Builder‑mode additions for consumers reimplementing the toolchain
   (feedback from building `nimony-lsp`): `decl_of` reverse‑index tool (symId →
   declaration site from the `.s.nif`); `raw` mode on `compile`/`build`/

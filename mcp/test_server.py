@@ -303,8 +303,17 @@ def main():
         assert d0['sym'].startswith('addup'), 'symId base: %r' % d0
         assert 'addup' in d0.get('signature', ''), \
             'decl_of should render a signature: %r' % d0
-        ok('decl_of "addup" -> %s at %s:%s' %
-           (d0['kind'], d0['file'], d0['line']))
+        assert dcl.get('backend') in ('niflens', 'python'), \
+            'decl_of should report its backend: %r' % dcl
+        # When the niflens helper is installed it must be preferred, and it
+        # returns module-qualified symIds (add.0.<mod>) with name-glyph columns.
+        if dcl['backend'] == 'niflens':
+            assert d0['sym'].count('.') >= 2, \
+                'niflens symId should be module-qualified: %r' % d0
+            assert d0.get('name') == 'addup', \
+                'niflens should carry the demangled name: %r' % d0
+        ok('decl_of "addup" -> %s at %s:%s (backend=%s)' %
+           (d0['kind'], d0['file'], d0['line'], dcl['backend']))
 
         # mangled-symId prefix match + terse shape
         dcl2 = client.call_tool('decl_of',
