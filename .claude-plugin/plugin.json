@@ -1,6 +1,6 @@
 {
   "name": "aowlcode",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "Token-efficient agent tooling for Nim and Nimony codebases: compile/diagnostics, NIF artifact inspection (outline/query/diff), def/uses, and a build-output-trimming toolkit.",
   "author": {
     "name": "savannt"

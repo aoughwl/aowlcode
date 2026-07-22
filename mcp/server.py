@@ -1751,8 +1751,11 @@ def tool_trace(args):
     try:
         # 1) compile to typed NIF (aowli needs nimony's .s.nif; -f forces a
         #    fresh build so the artifact is always emitted into our nimcache).
-        cmd = [nimony_bin('nimony'), 'c', '--nimcache:' + ncache, '-f',
-               file_abs]
+        extra = args.get('extra_args') or []
+        if not isinstance(extra, list):
+            extra = [str(extra)]
+        cmd = [nimony_bin('nimony'), 'c', '--nimcache:' + ncache, '-f'] \
+            + [str(a) for a in extra] + [file_abs]
         rc, out, timed_out = run(cmd, cwd=cwd, timeout=180)
         if timed_out:
             return {'error': 'nimony compile timed out'}
@@ -1857,8 +1860,11 @@ def tool_debug(args):
     ncache = tempfile.mkdtemp(prefix='aowlidbg_')
     try:
         # 1) compile to typed NIF (aowli needs nimony's .s.nif).
-        cmd = [nimony_bin('nimony'), 'c', '--nimcache:' + ncache, '-f',
-               file_abs]
+        extra = args.get('extra_args') or []
+        if not isinstance(extra, list):
+            extra = [str(extra)]
+        cmd = [nimony_bin('nimony'), 'c', '--nimcache:' + ncache, '-f'] \
+            + [str(a) for a in extra] + [file_abs]
         rc, out, timed_out = run(cmd, cwd=cwd, timeout=180)
         if timed_out:
             return {'error': 'nimony compile timed out'}
@@ -2578,6 +2584,12 @@ TOOLS = [
             'properties': {
                 'file': {'type': 'string',
                          'description': 'Path to a Nimony .nim file to trace.'},
+                'extra_args': {'type': 'array', 'items': {'type': 'string'},
+                               'description': 'Extra args passed to the nimony '
+                                              'compile, e.g. project search '
+                                              'paths ["-p:/proj/src"]. Needed '
+                                              'when the program imports modules '
+                                              'outside the stdlib.'},
                 'max_lines': {'type': 'integer',
                               'description': 'Cap on call-tree lines returned '
                                              '(default 300; summary footer '
@@ -2614,6 +2626,12 @@ TOOLS = [
             'properties': {
                 'file': {'type': 'string',
                          'description': 'Path to a Nimony .nim file to debug.'},
+                'extra_args': {'type': 'array', 'items': {'type': 'string'},
+                               'description': 'Extra args passed to the nimony '
+                                              'compile, e.g. project search '
+                                              'paths ["-p:/proj/src"]. Needed '
+                                              'when the program imports modules '
+                                              'outside the stdlib.'},
                 'breaks': {
                     'type': 'array',
                     'items': {'type': 'integer'},
