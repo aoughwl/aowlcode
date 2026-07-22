@@ -1,14 +1,14 @@
-# nim-code
+# aowlcode
 
 A Claude Code plugin + MCP server that mediates agent access to the **Nim** and
 **Nimony** toolchains through structured tools — so an agent works from compact
 diagnostics, outlines, and targeted NIF slices instead of raw compiler output and
 multi-hundred-kilobyte S-expression artifacts.
 
-**📖 Full docs → [aoughwl.github.io/docs/nim-code](https://aoughwl.github.io/docs/nim-code)**
+**📖 Full docs → [aoughwl.github.io/docs/aowlcode](https://aoughwl.github.io/docs/aowlcode)**
 
 ```bash
-claude --plugin-dir /path/to/nim-code
+claude --plugin-dir /path/to/aowlcode
 ```
 
 - One interface over both toolchains (`nim`/`nimsuggest`/`nimble` and

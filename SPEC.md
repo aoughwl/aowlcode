@@ -1,4 +1,4 @@
-# nim-code — Claude Code plugin SPEC (shared contract)
+# aowlcode — Claude Code plugin SPEC (shared contract)
 
 A Claude Code plugin that makes agent work on **Nim** AND **Nimony** codebases
 token-efficient. Everything below is the contract all pieces build against.
@@ -104,7 +104,7 @@ conclusion. Must mention it handles both Nim source and Nimony NIF.
 
 ## plugin.json (`.claude-plugin/plugin.json`) + `.mcp.json`
 
-Manifest: name `nim-code`, version `0.1.0`, description, author `savannt`.
+Manifest: name `aowlcode`, version `0.1.0`, description, author `savannt`.
 `.mcp.json` registers the MCP server:
 `{"mcpServers":{"nimlang":{"command":"python3","args":["${CLAUDE_PLUGIN_ROOT}/mcp/server.py"]}}}`
 `hooks/hooks.json` wires the two hooks.

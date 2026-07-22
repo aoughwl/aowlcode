@@ -1,5 +1,5 @@
 {
-  "nim-code": {
+  "aowlcode": {
     "command": "python3",
     "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/lsp-dispatch.py"],
     "extensionToLanguage": {

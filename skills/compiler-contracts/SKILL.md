@@ -11,7 +11,7 @@ description: >-
 
 # Compiler contracts (for building a competing consumer)
 
-The `nim-code` MCP tools are tuned for *reading and debugging* Nimony/Nim: they
+The `aowlcode` MCP tools are tuned for *reading and debugging* Nimony/Nim: they
 handle these contracts internally so a caller never sees them. If you are
 instead **reimplementing a consumer of the same toolchain**, the conveniences
 hide exactly the invariants you must reproduce. This is the checklist.

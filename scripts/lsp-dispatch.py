@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Per-project LSP dispatcher for the nim-code plugin.
+"""Per-project LSP dispatcher for the aowlcode plugin.
 
 Claude Code launches one language server per mapped extension, and its only
 documented configuration surface is the plugin's own `.lsp.json`. Nim and
@@ -73,7 +73,7 @@ def main():
     exe = server if os.path.isabs(server) else shutil.which(server)
     if not exe:
         sys.stderr.write(
-            'nim-code lsp-dispatch: %s server %r not found on PATH '
+            'aowlcode lsp-dispatch: %s server %r not found on PATH '
             '(toolchain=%s). Install it or set %s.\n' % (
                 toolchain, server, toolchain,
                 'NIMONY_LSP' if toolchain == 'nimony' else 'NIM_LANGSERVER'))
@@ -84,7 +84,7 @@ def main():
     try:
         os.execvpe(exe, argv, env)
     except OSError as e:
-        sys.stderr.write('nim-code lsp-dispatch: failed to exec %s: %s\n'
+        sys.stderr.write('aowlcode lsp-dispatch: failed to exec %s: %s\n'
                          % (exe, e))
         sys.exit(126)
 

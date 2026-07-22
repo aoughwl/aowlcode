@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""nimlang MCP server for the nim-code Claude Code plugin.
+"""nimlang MCP server for the aowlcode Claude Code plugin.
 
 Zero-dependency (stdlib only), Python 3.7 compatible. Speaks JSON-RPC 2.0 over
 stdio implementing the MCP subset the plugin needs: initialize,
@@ -17,6 +17,8 @@ import json
 import glob
 import time
 import difflib
+import shutil
+import tempfile
 import subprocess
 
 # --------------------------------------------------------------------------
@@ -1639,6 +1641,245 @@ def tool_shrink(args):
     }
 
 
+def aowli_bin(name):
+    """Resolve an aowli binary (default ~/aowli/bin), like nimony_bin/nim_bin."""
+    return find_bin(name, 'AOWLI_BIN_DIR', _home('aowli', 'bin'))
+
+
+# main module's .s.nif header line: (stmts@,<base36 count>,<path>/<basename>
+def _find_main_snif(ncache, basename):
+    """Locate the main module's .s.nif in a nimcache: the one whose `stmts`
+    header names `basename`. Mirrors examples/debug/run.sh's grep exactly
+    (searches the whole file, not just the head) so any header position works.
+    """
+    esc = re.escape(basename)
+    header_re = re.compile(r'stmts@,[^,]+,[^\s]*' + esc)
+    candidates = sorted(glob.glob(os.path.join(ncache, '*.s.nif')),
+                        key=os.path.getmtime, reverse=True)
+    for path in candidates:
+        try:
+            with open(path, 'r', errors='replace') as fh:
+                text = fh.read()
+        except (IOError, OSError):
+            continue
+        if header_re.search(text):
+            return path
+    return None
+
+
+def _cap_trace(text, max_lines):
+    """Trim a call-tree trace to max_lines, always keeping the `-- trace:`
+    summary footer (the token-thrifty conclusion) if present."""
+    lines = text.rstrip('\n').split('\n') if text else []
+    footer = ''
+    if lines and lines[-1].lstrip().startswith('-- trace:'):
+        footer = lines[-1]
+        body = lines[:-1]
+    else:
+        body = lines
+    if len(body) <= max_lines:
+        kept = body
+        truncated = False
+    else:
+        kept = body[:max_lines]
+        truncated = True
+    out = list(kept)
+    if truncated:
+        out.append('  ... (trace trimmed to %d lines; %d total)'
+                   % (max_lines, len(body)))
+    if footer:
+        out.append(footer)
+    return '\n'.join(out)
+
+
+def tool_trace(args):
+    """Compile a .nim with nimony to typed NIF, then run it under the aowli
+    tree-walking interpreter with --trace and return the call tree.
+
+    Returns {ok, trace, stdout, exit_code} on success, {error: ...} otherwise.
+    Uses the ALREADY-BUILT ~/aowli/bin/aowli-interp — never rebuilds aowli.
+    """
+    file_path = args.get('file')
+    if not file_path:
+        return {'error': 'missing required arg: file'}
+    if not os.path.isfile(file_path):
+        return {'error': 'no such file: %s' % file_path}
+    max_lines = args.get('max_lines')
+    try:
+        max_lines = int(max_lines) if max_lines else 300
+    except (TypeError, ValueError):
+        max_lines = 300
+
+    interp = aowli_bin('aowli-interp')
+    if not (os.path.isfile(interp) and os.access(interp, os.X_OK)):
+        return {'error': 'aowli-interp binary not found or not executable '
+                         '(looked for %r; set AOWLI_BIN_DIR to override)'
+                         % interp}
+
+    file_abs = os.path.abspath(file_path)
+    basename = os.path.basename(file_abs)
+    cwd = os.path.dirname(file_abs) or '.'
+    ncache = tempfile.mkdtemp(prefix='aowlidbg_')
+    try:
+        # 1) compile to typed NIF (aowli needs nimony's .s.nif; -f forces a
+        #    fresh build so the artifact is always emitted into our nimcache).
+        cmd = [nimony_bin('nimony'), 'c', '--nimcache:' + ncache, '-f',
+               file_abs]
+        rc, out, timed_out = run(cmd, cwd=cwd, timeout=180)
+        if timed_out:
+            return {'error': 'nimony compile timed out'}
+        diags = parse_diagnostics(out)
+        errs = [d for d in diags if d['severity'] == 'Error']
+        if errs:
+            return {'error': 'compile failed: ' + '; '.join(
+                diag_to_str(d) for d in errs[:5])}
+
+        # 2) locate the main module's .s.nif
+        main = _find_main_snif(ncache, basename)
+        if main is None:
+            return {'error': 'could not locate main module .s.nif for %s in '
+                             'the nimcache (compile may have produced no typed '
+                             'NIF)' % basename}
+
+        # 3) run under the tracer; STDERR = call tree, STDOUT = program output.
+        try:
+            proc = subprocess.Popen(
+                [interp, '--trace', main],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                universal_newlines=True)
+            prog_out, trace_txt = proc.communicate(timeout=120)
+            exit_code = proc.returncode
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            return {'error': 'aowli-interp timed out (possible infinite loop '
+                             'in the traced program)'}
+        except OSError as e:
+            return {'error': 'failed to launch aowli-interp: %s' % e}
+
+        trace_txt = _cap_trace(trace_txt or '', max_lines)
+        prog_out = prog_out or ''
+        if len(prog_out) > 4000:
+            prog_out = prog_out[:4000] + '\n... (stdout truncated)'
+        result = {
+            'ok': exit_code == 0,
+            'trace': trace_txt,
+            'stdout': prog_out,
+            'exit_code': exit_code,
+        }
+        if args.get('raw'):
+            result['main_snif'] = main
+            result['invocation'] = ' '.join(cmd) + '  &&  ' + \
+                interp + ' --trace <main.s.nif>'
+        return result
+    finally:
+        shutil.rmtree(ncache, ignore_errors=True)
+
+
+def tool_debug(args):
+    """Compile a .nim with nimony to typed NIF, then run it under the aowli
+    batch breakpoint/tracepoint engine (~/aowli/bin/aowli-dbg) with the given
+    breakpoints, and return the capture log: for each hit, the source line, the
+    enclosing routine, and the current frame's locals (name = value).
+
+    NON-interactive: no pause/resume/stepping — each hit records the frame and
+    execution continues. Returns {ok, captures, stdout, exit_code} on success,
+    {error: ...} otherwise. Uses the ALREADY-BUILT ~/aowli/bin/aowli-dbg.
+    """
+    file_path = args.get('file')
+    if not file_path:
+        return {'error': 'missing required arg: file'}
+    if not os.path.isfile(file_path):
+        return {'error': 'no such file: %s' % file_path}
+
+    # Normalise the breakpoint args: `breaks` (line numbers), `break_funcs`
+    # (routine names). Accept a single scalar or a list for each.
+    def _as_list(v):
+        if v is None:
+            return []
+        return v if isinstance(v, list) else [v]
+    breaks = _as_list(args.get('breaks'))
+    break_funcs = _as_list(args.get('break_funcs'))
+    bp_args = []
+    for ln in breaks:
+        try:
+            bp_args.append('--break:%d' % int(ln))
+        except (TypeError, ValueError):
+            return {'error': 'invalid break line: %r (must be an integer)' % ln}
+    for nm in break_funcs:
+        nm = str(nm).strip()
+        if nm:
+            bp_args.append('--break-func:%s' % nm)
+    if not bp_args:
+        return {'error': 'no breakpoints given: pass `breaks` (line numbers) '
+                         'and/or `break_funcs` (routine names)'}
+
+    dbg = aowli_bin('aowli-dbg')
+    if not (os.path.isfile(dbg) and os.access(dbg, os.X_OK)):
+        return {'error': 'aowli-dbg binary not found or not executable '
+                         '(looked for %r; set AOWLI_BIN_DIR to override)' % dbg}
+
+    file_abs = os.path.abspath(file_path)
+    basename = os.path.basename(file_abs)
+    cwd = os.path.dirname(file_abs) or '.'
+    ncache = tempfile.mkdtemp(prefix='aowlidbg_')
+    try:
+        # 1) compile to typed NIF (aowli needs nimony's .s.nif).
+        cmd = [nimony_bin('nimony'), 'c', '--nimcache:' + ncache, '-f',
+               file_abs]
+        rc, out, timed_out = run(cmd, cwd=cwd, timeout=180)
+        if timed_out:
+            return {'error': 'nimony compile timed out'}
+        diags = parse_diagnostics(out)
+        errs = [d for d in diags if d['severity'] == 'Error']
+        if errs:
+            return {'error': 'compile failed: ' + '; '.join(
+                diag_to_str(d) for d in errs[:5])}
+
+        # 2) locate the main module's .s.nif
+        main = _find_main_snif(ncache, basename)
+        if main is None:
+            return {'error': 'could not locate main module .s.nif for %s in '
+                             'the nimcache (compile may have produced no typed '
+                             'NIF)' % basename}
+
+        # 3) run under aowli-dbg; STDERR = capture log, STDOUT = program output.
+        try:
+            proc = subprocess.Popen(
+                [dbg] + bp_args + [main],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                universal_newlines=True)
+            prog_out, captures = proc.communicate(timeout=120)
+            exit_code = proc.returncode
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            return {'error': 'aowli-dbg timed out (possible infinite loop in '
+                             'the debugged program)'}
+        except OSError as e:
+            return {'error': 'failed to launch aowli-dbg: %s' % e}
+
+        captures = captures or ''
+        prog_out = prog_out or ''
+        if len(prog_out) > 4000:
+            prog_out = prog_out[:4000] + '\n... (stdout truncated)'
+        if len(captures) > 20000:
+            captures = captures[:20000] + '\n... (capture log truncated)'
+        result = {
+            'ok': exit_code == 0,
+            'captures': captures,
+            'stdout': prog_out,
+            'exit_code': exit_code,
+        }
+        if args.get('raw'):
+            result['main_snif'] = main
+            result['invocation'] = ' '.join(cmd) + '  &&  ' + \
+                dbg + ' ' + ' '.join(bp_args) + ' <main.s.nif>'
+        return result
+    finally:
+        shutil.rmtree(ncache, ignore_errors=True)
+
+
 # --------------------------------------------------------------------------
 # Tool: api  (typed API of a module or third-party package)
 # --------------------------------------------------------------------------
@@ -2292,6 +2533,63 @@ TOOLS = [
             'required': ['file'],
         },
         'handler': tool_shrink,
+    },
+    {
+        'name': 'trace',
+        'description': 'Run a Nimony program under the aowli interpreter with '
+                       'the call-tree tracer on (aowlidbg). Compiles the .nim '
+                       'to typed NIF, runs ~/aowli/bin/aowli-interp --trace, and '
+                       'returns the depth-indented call tree (enter/return/'
+                       'source line + summary) plus the program stdout.',
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'file': {'type': 'string',
+                         'description': 'Path to a Nimony .nim file to trace.'},
+                'max_lines': {'type': 'integer',
+                              'description': 'Cap on call-tree lines returned '
+                                             '(default 300; summary footer '
+                                             'always kept).'},
+                'raw': RAW_PROP,
+            },
+            'required': ['file'],
+        },
+        'handler': tool_trace,
+    },
+    {
+        'name': 'debug',
+        'description': 'Run a Nimony program under the aowli batch breakpoint / '
+                       'tracepoint engine (aowlidbg). Compiles the .nim to typed '
+                       'NIF, runs ~/aowli/bin/aowli-dbg with the given '
+                       'breakpoints, and returns the capture log: for each hit, '
+                       'the source line, enclosing routine, and the current '
+                       'frame locals (name = value). Non-interactive (no pause/'
+                       'step) — each hit records the frame and execution '
+                       'continues. Use to inspect variable values at a line '
+                       'without adding echo statements.',
+        'inputSchema': {
+            'type': 'object',
+            'properties': {
+                'file': {'type': 'string',
+                         'description': 'Path to a Nimony .nim file to debug.'},
+                'breaks': {
+                    'type': 'array',
+                    'items': {'type': 'integer'},
+                    'description': 'Source line numbers to break on (any '
+                                   'routine). Each hit dumps that frame\'s '
+                                   'locals.',
+                },
+                'break_funcs': {
+                    'type': 'array',
+                    'items': {'type': 'string'},
+                    'description': 'Routine (bare) names to break on — fires at '
+                                   'every statement inside the named routine.',
+                },
+                'raw': RAW_PROP,
+            },
+            'required': ['file'],
+        },
+        'handler': tool_debug,
     },
     {
         'name': 'api',

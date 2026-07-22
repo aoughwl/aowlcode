@@ -7,7 +7,7 @@ description: >-
   It runs the whole compile -> shrink -> explain -> edit -> recompile loop
   in its OWN context and returns only the final diff plus a one-line verdict,
   keeping all the verbose compiler / NIF output out of the parent thread.
-tools: Bash, Read, Edit, mcp__plugin_nim-code_nimlang__compile, mcp__plugin_nim-code_nimlang__explain_failure, mcp__plugin_nim-code_nimlang__shrink, mcp__plugin_nim-code_nimlang__outline, mcp__plugin_nim-code_nimlang__nif_query, mcp__plugin_nim-code_nimlang__nif_render
+tools: Bash, Read, Edit, mcp__plugin_aowlcode_nimlang__compile, mcp__plugin_aowlcode_nimlang__explain_failure, mcp__plugin_aowlcode_nimlang__shrink, mcp__plugin_aowlcode_nimlang__outline, mcp__plugin_aowlcode_nimlang__nif_query, mcp__plugin_aowlcode_nimlang__nif_render
 model: haiku
 ---
 
