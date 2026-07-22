@@ -1654,6 +1654,15 @@ def aowli_bin(name):
     return find_bin(name, 'AOWLI_BIN_DIR', _home('.aowl', 'bin'))
 
 
+def _aowli_missing_msg(name, looked):
+    """Actionable error when an aowli release binary isn't installed."""
+    return ('%s not found (looked for %r). Install the aowli release binary: '
+            'run `aowlup` (drops it in ~/.aowl/bin), or download it from '
+            'https://github.com/aoughwl/aowli-release/releases and either put '
+            'it on that path or set AOWLI_BIN_DIR to its directory.'
+            % (name, looked))
+
+
 # main module's .s.nif header line: (stmts@,<base36 count>,<path>/<basename>
 def _find_main_snif(ncache, basename):
     """Locate the main module's .s.nif in a nimcache: the one whose `stmts`
@@ -1733,9 +1742,7 @@ def tool_trace(args):
 
     interp = aowli_bin('aowli-interp')
     if not (os.path.isfile(interp) and os.access(interp, os.X_OK)):
-        return {'error': 'aowli-interp binary not found or not executable '
-                         '(looked for %r; set AOWLI_BIN_DIR to override)'
-                         % interp}
+        return {'error': _aowli_missing_msg('aowli-interp', interp)}
 
     file_abs = os.path.abspath(file_path)
     basename = os.path.basename(file_abs)
@@ -1842,8 +1849,7 @@ def tool_debug(args):
 
     dbg = aowli_bin('aowli-dbg')
     if not (os.path.isfile(dbg) and os.access(dbg, os.X_OK)):
-        return {'error': 'aowli-dbg binary not found or not executable '
-                         '(looked for %r; set AOWLI_BIN_DIR to override)' % dbg}
+        return {'error': _aowli_missing_msg('aowli-dbg', dbg)}
 
     file_abs = os.path.abspath(file_path)
     basename = os.path.basename(file_abs)
